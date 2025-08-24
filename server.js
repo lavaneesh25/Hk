@@ -1,8 +1,8 @@
 import express from "express";
-import twilio from "twilio";
 import bodyParser from "body-parser";
-import fetch from "node-fetch";
 import dotenv from "dotenv";
+import fetch from "node-fetch";
+import twilio from "twilio";
 
 dotenv.config();
 
@@ -11,7 +11,7 @@ app.use(bodyParser.urlencoded({ extended: false }));
 
 const VoiceResponse = twilio.twiml.VoiceResponse;
 
-/* ================= DATA ================= */
+// Predefined crop prices
 const cropPrices = {
   Wheat: "2000 per quintal",
   Rice: "2500 per quintal",
@@ -25,6 +25,7 @@ const cropPrices = {
   Banana: "1000 per quintal",
 };
 
+// Soil to crops mapping
 const soilCrops = {
   "Red Soil": "Groundnut, Cotton",
   "Black Soil": "Cotton, Soybean",
@@ -33,6 +34,7 @@ const soilCrops = {
   "Desert Soil": "Millet",
 };
 
+// Twilio language/voice mapping
 const languageMap = {
   "1": { voice: "alice", language: "en-IN" }, // English
   "2": { voice: "alice", language: "hi-IN" }, // Hindi
@@ -40,6 +42,7 @@ const languageMap = {
   "4": { voice: "alice", language: "mr-IN" }, // Marathi
 };
 
+// Crop-focused weather safety tips
 const safetyTips = {
   rain:
     "Ensure proper drainage to avoid water logging. Avoid fertilizer application during rain. Delay harvesting if possible.",
@@ -81,7 +84,7 @@ app.post("/language", (req, res) => {
     method: "POST",
   });
   gather.say(
-    "Press 1 for Weather, 2 for Crop Price, 3 for Suitable Soil for Crop, 4 to send alert to service center",
+    "Press 1 for Weather, 2 for Crop Price, 3 for Suitable Soil for Crop, 4 to notify service center",
     lang
   );
 
@@ -153,14 +156,17 @@ app.post("/weather", async (req, res) => {
   }
 
   try {
+    // Current weather
     const currentRes = await fetch(
       `https://api.openweathermap.org/data/2.5/weather?zip=${pincode},IN&appid=${apiKey}&units=metric`
     );
     const currentData = await currentRes.json();
 
+    let weatherDesc = "unknown";
     if (currentData?.main && currentData?.weather?.[0]) {
+      weatherDesc = currentData.weather[0].description;
       twiml.say(
-        `Today's weather: ${currentData.weather[0].description}, temperature is ${Math.round(
+        `Today's weather: ${weatherDesc}, temperature is ${Math.round(
           currentData.main.temp
         )} degree Celsius.`,
         lang
@@ -169,10 +175,13 @@ app.post("/weather", async (req, res) => {
       twiml.say("Unable to fetch today's weather.", lang);
     }
 
+    // Forecast next 2 days
     const forecastRes = await fetch(
       `https://api.openweathermap.org/data/2.5/forecast?zip=${pincode},IN&appid=${apiKey}&units=metric`
     );
     const forecastData = await forecastRes.json();
+
+    let safetyMessage = safetyTips.normal;
 
     if (forecastData?.list?.length) {
       const forecastDays = {};
@@ -184,10 +193,7 @@ app.post("/weather", async (req, res) => {
         forecastDays[date].push(item);
       });
 
-      const days = Object.keys(forecastDays).slice(1, 3);
-      let alertMessage = "";
-      let safetyMessage = "";
-
+      const days = Object.keys(forecastDays).slice(1, 3); // next 2 days
       days.forEach((day) => {
         const slots = forecastDays[day];
         const rainHours = slots.filter((i) =>
@@ -202,41 +208,29 @@ app.post("/weather", async (req, res) => {
             : null;
 
         if (rainHours >= 4) {
-          alertMessage += `${day}: Heavy rain expected. Average temperature ${avgTemp} degree Celsius. `;
           safetyMessage = safetyTips.rain;
         } else if (avgTemp !== null && avgTemp > 35) {
-          alertMessage += `${day}: Hot conditions expected. Average temperature ${avgTemp} degree Celsius. `;
           safetyMessage = safetyTips.heat;
         } else if (avgTemp !== null && avgTemp < 10) {
-          alertMessage += `${day}: Cold conditions expected. Average temperature ${avgTemp} degree Celsius. `;
           safetyMessage = safetyTips.cold;
         } else {
-          alertMessage += `${day}: No significant weather issues. Average temperature ${avgTemp} degree Celsius. `;
           safetyMessage = safetyTips.normal;
         }
       });
-
-      twiml.say(`Weather alert for next days: ${alertMessage}`, lang);
-      twiml.say(`Recommended crop safety measures: ${safetyMessage}`, lang);
-
-      const gather = twiml.gather({
-        numDigits: 1,
-        action: `/weatherAlert?lang=${langParam}`,
-        method: "POST",
-      });
-      gather.say(
-        "Do you want me to send this alert to the service center? Press 1 for Yes, 2 for No.",
-        lang
-      );
-
-      res.type("text/xml");
-      return res.send(twiml.toString());
-    } else {
-      twiml.say("Unable to fetch forecast information.", lang);
-      twiml.hangup();
-      res.type("text/xml");
-      return res.send(twiml.toString());
     }
+
+    // Ask if user wants to notify service center (manual)
+    const gather = twiml.gather({
+      numDigits: 1,
+      action: `/weatherAlert?lang=${langParam}&pincode=${pincode}&weatherDesc=${encodeURIComponent(
+        weatherDesc
+      )}&safetyMessage=${encodeURIComponent(safetyMessage)}`,
+      method: "POST",
+    });
+    gather.say("Press 1 to notify service center, or 2 to skip.", lang);
+
+    res.type("text/xml");
+    return res.send(twiml.toString());
   } catch (err) {
     twiml.say("Error fetching weather information.", lang);
     twiml.hangup();
@@ -245,15 +239,31 @@ app.post("/weather", async (req, res) => {
   }
 });
 
-/* ================= WEATHER ALERT DECISION ================= */
+/* ============ WEATHER ALERT DECISION (Manual follow-up) ============ */
 app.post("/weatherAlert", (req, res) => {
   const twiml = new VoiceResponse();
   const digit = (req.body.Digits || "").trim();
   const langParam = req.query.lang || "1";
   const lang = languageMap[langParam] || languageMap["1"];
 
+  // Extract data from query
+  const callerNumber = req.body.From;
+  const pincode = req.query.pincode || "unknown";
+  const weatherDesc = req.query.weatherDesc || "unknown";
+  const safetyMessage = req.query.safetyMessage || "No safety tips available";
+
+  // Log full alert info
+  console.log("📞 Weather alert requested!");
+  console.log("Caller Number:", callerNumber);
+  console.log("Pincode:", pincode);
+  console.log("Current Weather:", weatherDesc);
+  console.log("Recommended Crop Safety Tips:", safetyMessage);
+
   if (digit === "1") {
-    twiml.say("Alert will be sent to the service center.", lang);
+    twiml.say(
+      "Alert noted. A service agent will contact you shortly with advice.",
+      lang
+    );
     twiml.hangup();
   } else if (digit === "2") {
     twiml.say("Okay, no alert will be sent.", lang);
@@ -261,13 +271,14 @@ app.post("/weatherAlert", (req, res) => {
   } else {
     const gather = twiml.gather({
       numDigits: 1,
-      action: `/weatherAlert?lang=${langParam}`,
+      action: `/weatherAlert?lang=${langParam}&pincode=${encodeURIComponent(
+        pincode
+      )}&weatherDesc=${encodeURIComponent(
+        weatherDesc
+      )}&safetyMessage=${encodeURIComponent(safetyMessage)}`,
       method: "POST",
     });
-    gather.say(
-      "Invalid input. Press 1 to send the alert, or 2 to skip.",
-      lang
-    );
+    gather.say("Invalid input. Press 1 to notify service center, or 2 to skip.", lang);
   }
 
   res.type("text/xml");
@@ -334,7 +345,10 @@ app.post("/alert", (req, res) => {
   const langParam = req.query.lang || "1";
   const lang = languageMap[langParam] || languageMap["1"];
 
-  twiml.say("Alert will be sent to the service center.", lang);
+  twiml.say(
+    "Alert noted. A service agent will contact you shortly.",
+    lang
+  );
   twiml.hangup();
 
   res.type("text/xml");
@@ -343,4 +357,4 @@ app.post("/alert", (req, res) => {
 
 /* ================= SERVER ================= */
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
