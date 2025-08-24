@@ -11,9 +11,6 @@ app.use(bodyParser.urlencoded({ extended: false }));
 
 const VoiceResponse = twilio.twiml.VoiceResponse;
 
-// Twilio REST client for SMS
-const smsClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-
 /* ================= DATA ================= */
 
 // Predefined crop prices
@@ -39,9 +36,9 @@ const soilCrops = {
   "Desert Soil": "Millet",
 };
 
-// Twilio language/voice mapping (use "alice" with regional languages)
+// Twilio language/voice mapping
 const languageMap = {
-  "1": { voice: "alice", language: "en-IN" }, // English (India)
+  "1": { voice: "alice", language: "en-IN" }, // English
   "2": { voice: "alice", language: "hi-IN" }, // Hindi
   "3": { voice: "alice", language: "te-IN" }, // Telugu
   "4": { voice: "alice", language: "mr-IN" }, // Marathi
@@ -57,15 +54,6 @@ const safetyTips = {
     "Protect seedlings with crop covers. Prefer daytime irrigation to reduce frost damage. Avoid water stagnation near roots.",
   normal:
     "No major weather risks detected. Continue routine crop care and regular field scouting.",
-};
-
-// Simple soil farming tips (added to soil option)
-const soilTips = {
-  "Red Soil": "Add organic matter and schedule frequent light irrigation to improve moisture retention.",
-  "Black Soil": "Ensure good drainage and avoid waterlogging; ideal for cotton—monitor for pests.",
-  "Alluvial Soil": "Balanced fertilization improves yields; suitable for cereals like wheat and rice.",
-  "Laterite Soil": "Apply lime if soil is acidic and maintain regular irrigation for paddy or tea.",
-  "Desert Soil": "Use drip irrigation and mulching to conserve scarce moisture; pick drought-tolerant crops.",
 };
 
 /* ================= ENTRY POINT ================= */
@@ -98,7 +86,7 @@ app.post("/language", (req, res) => {
     method: "POST",
   });
   gather.say(
-    "Press 1 for Weather, 2 for Crop Price, 3 for Suitable Soil for Crop",
+    "Press 1 for Weather, 2 for Crop Price, 3 for Suitable Soil for Crop, 4 to send alert to service center",
     lang
   );
 
@@ -143,6 +131,8 @@ app.post("/menu", (req, res) => {
       "Press 1 for Red Soil, 2 for Black Soil, 3 for Alluvial Soil, 4 for Laterite Soil, 5 for Desert Soil",
       lang
     );
+  } else if (digit === "4") {
+    twiml.redirect(`/alert?lang=${langParam}`);
   } else {
     twiml.say("Invalid choice", lang);
     twiml.redirect("/voice");
@@ -152,7 +142,7 @@ app.post("/menu", (req, res) => {
   res.send(twiml.toString());
 });
 
-/* ================= WEATHER (LIVE) ================= */
+/* ================= WEATHER ================= */
 app.post("/weather", async (req, res) => {
   const twiml = new VoiceResponse();
   const pincode = (req.body.Digits || "").replace(/\D/g, "");
@@ -185,7 +175,7 @@ app.post("/weather", async (req, res) => {
       twiml.say("Unable to fetch today's weather.", lang);
     }
 
-    // 5-day/3-hour forecast; we’ll compute next 2 days overview
+    // Forecast next 2 days
     const forecastRes = await fetch(
       `https://api.openweathermap.org/data/2.5/forecast?zip=${pincode},IN&appid=${apiKey}&units=metric`
     );
@@ -237,12 +227,10 @@ app.post("/weather", async (req, res) => {
       twiml.say(`Weather alert for next days: ${alertMessage}`, lang);
       twiml.say(`Recommended crop safety measures: ${safetyMessage}`, lang);
 
-      // Ask if user wants to send SMS alert to service center
+      // Ask if user wants to notify (just SAY it; no real send)
       const gather = twiml.gather({
         numDigits: 1,
-        action: `/weatherAlert?lang=${langParam}&msg=${encodeURIComponent(
-          alertMessage + " " + safetyMessage
-        )}`,
+        action: `/weatherAlert?lang=${langParam}`,
         method: "POST",
       });
       gather.say(
@@ -259,7 +247,6 @@ app.post("/weather", async (req, res) => {
       return res.send(twiml.toString());
     }
   } catch (err) {
-    console.error("Weather fetch error:", err);
     twiml.say("Error fetching weather information.", lang);
     twiml.hangup();
     res.type("text/xml");
@@ -268,26 +255,15 @@ app.post("/weather", async (req, res) => {
 });
 
 /* ============ WEATHER ALERT DECISION (Yes/No) ============ */
-app.post("/weatherAlert", async (req, res) => {
+app.post("/weatherAlert", (req, res) => {
   const twiml = new VoiceResponse();
   const digit = (req.body.Digits || "").trim();
   const langParam = req.query.lang || "1";
-  const msg = decodeURIComponent(req.query.msg || "");
   const lang = languageMap[langParam] || languageMap["1"];
 
   if (digit === "1") {
-    // SEND SMS to service center
-    try {
-      await smsClient.messages.create({
-        body: `Weather Alert: ${msg}`,
-        from: process.env.TWILIO_PHONE_NUMBER,
-        to: "+919398650755", // service center number
-      });
-      twiml.say("Alert has been sent to the service center.", lang);
-    } catch (err) {
-      console.error("SMS send error:", err);
-      twiml.say("Failed to send alert. Please try again later.", lang);
-    }
+    // Only speak confirmation; no real sending
+    twiml.say("Alert will be sent to the service center.", lang);
     twiml.hangup();
   } else if (digit === "2") {
     twiml.say("Okay, no alert will be sent.", lang);
@@ -296,10 +272,13 @@ app.post("/weatherAlert", async (req, res) => {
     // invalid input → ask again
     const gather = twiml.gather({
       numDigits: 1,
-      action: `/weatherAlert?lang=${langParam}&msg=${encodeURIComponent(msg)}`,
+      action: `/weatherAlert?lang=${langParam}`,
       method: "POST",
     });
-    gather.say("Invalid input. Press 1 to send the alert, or 2 to skip.", lang);
+    gather.say(
+      "Invalid input. Press 1 to send the alert, or 2 to skip.",
+      lang
+    );
   }
 
   res.type("text/xml");
@@ -330,10 +309,7 @@ app.post("/cropprice", (req, res) => {
   if (digit === "0") index = 9;
   const crop = crops[index] || "Banana";
 
-  const storageTip =
-    "Store harvested grains in a clean, dry, covered place to prevent moisture and pest damage.";
-
-  twiml.say(`Price of ${crop} is ${cropPrices[crop]}. ${storageTip}`, lang);
+  twiml.say(`Price of ${crop} is ${cropPrices[crop]}`, lang);
   twiml.hangup();
 
   res.type("text/xml");
@@ -356,10 +332,24 @@ app.post("/soil", (req, res) => {
   ];
   const soil = soils[parseInt(digit, 10) - 1] || "Red Soil";
 
-  const crops = soilCrops[soil];
-  const tip = soilTips[soil] || "Follow best agronomic practices for your field conditions.";
+  twiml.say(`Suitable crops for ${soil} are ${soilCrops[soil]}`, lang);
+  twiml.hangup();
 
-  twiml.say(`Suitable crops for ${soil} are ${crops}. Tip: ${tip}`, lang);
+  res.type("text/xml");
+  res.send(twiml.toString());
+});
+
+/* ================= ALERT (MANUAL OPTION) ================= */
+app.post("/alert", (req, res) => {
+  const twiml = new VoiceResponse();
+  const langParam = req.query.lang || "1";
+  const lang = languageMap[langParam] || languageMap["1"];
+
+  // Only speak; no actual sending
+  twiml.say(
+    "Alert will be sent to the service center.",
+    lang
+  );
   twiml.hangup();
 
   res.type("text/xml");
