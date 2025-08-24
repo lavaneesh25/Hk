@@ -11,6 +11,8 @@ app.use(bodyParser.urlencoded({ extended: false }));
 
 const VoiceResponse = twilio.twiml.VoiceResponse;
 
+// ================= DATA =================
+
 // Predefined crop prices
 const cropPrices = {
   "Wheat": "2000 per quintal",
@@ -42,6 +44,14 @@ const languageMap = {
   "4": { lang: "mr-IN", voice: "alice" }
 };
 
+// Safety measures mapping
+const safetyTips = {
+  rain: "Since heavy rain is expected, make sure to cover harvested crops, avoid water logging in fields, and strengthen drainage systems.",
+  heat: "Due to high temperature, irrigate crops early morning or evening, and use mulching to conserve soil moisture.",
+  cold: "Cold conditions expected. Protect seedlings with cover and irrigate properly to reduce frost damage.",
+  normal: "No major weather risks detected. Continue regular farming practices."
+};
+
 // ================= ENTRY POINT =================
 app.post("/voice", (req, res) => {
   const twiml = new VoiceResponse();
@@ -64,14 +74,13 @@ app.post("/language", (req, res) => {
   const digit = req.body.Digits;
   const lang = languageMap[digit] || languageMap["1"]; // default English
 
-  // Pass language choice as query param to menu
   const gather = twiml.gather({
     numDigits: 1,
     action: `/menu?lang=${digit}`,
     method: "POST"
   });
   gather.say(
-    "Press 1 for Weather, 2 for Crop Price, 3 for Suitable Soil for Crop",
+    "Press 1 for Weather, 2 for Crop Price, 3 for Suitable Soil for Crop, 4 to send alert to service center",
     lang
   );
 
@@ -116,6 +125,8 @@ app.post("/menu", (req, res) => {
       "Press 1 for Red Soil, 2 for Black Soil, 3 for Alluvial Soil, 4 for Laterite Soil, 5 for Desert Soil",
       lang
     );
+  } else if (digit === "4") {
+    twiml.redirect(`/alert?lang=${langParam}`);
   } else {
     twiml.say("Invalid choice", lang);
     twiml.redirect("/voice");
@@ -134,7 +145,7 @@ app.post("/weather", async (req, res) => {
   const apiKey = process.env.OPENWEATHER_API_KEY;
 
   try {
-    // Today's weather
+    // Current weather
     const currentRes = await fetch(
       `https://api.openweathermap.org/data/2.5/weather?zip=${pincode},IN&appid=${apiKey}&units=metric`
     );
@@ -149,7 +160,7 @@ app.post("/weather", async (req, res) => {
       twiml.say("Unable to fetch today's weather.", lang);
     }
 
-    // Forecast alert for next 2 days
+    // Forecast next 2 days
     const forecastRes = await fetch(
       `https://api.openweathermap.org/data/2.5/forecast?zip=${pincode},IN&appid=${apiKey}&units=metric`
     );
@@ -167,6 +178,7 @@ app.post("/weather", async (req, res) => {
 
       const days = Object.keys(forecastDays).slice(1, 3); // next 2 days
       let alertMessage = "";
+      let safetyMessage = "";
 
       days.forEach((day) => {
         const rainHours = forecastDays[day].filter((i) =>
@@ -175,14 +187,23 @@ app.post("/weather", async (req, res) => {
         const temps = forecastDays[day].map((i) => i.main.temp);
         const avgTemp = Math.round(temps.reduce((a, b) => a + b, 0) / temps.length);
 
-        if (rainHours > 0) {
-          alertMessage += `${day}: Expect rain. Average temperature around ${avgTemp} degree Celsius. `;
+        if (rainHours >= 4) { // heavy rain threshold
+          alertMessage += `${day}: Heavy rain expected. Average temperature ${avgTemp} degree Celsius. `;
+          safetyMessage = safetyTips.rain;
+        } else if (avgTemp > 35) {
+          alertMessage += `${day}: Hot conditions expected. Average temperature ${avgTemp} degree Celsius. `;
+          safetyMessage = safetyTips.heat;
+        } else if (avgTemp < 10) {
+          alertMessage += `${day}: Cold conditions expected. Average temperature ${avgTemp} degree Celsius. `;
+          safetyMessage = safetyTips.cold;
         } else {
-          alertMessage += `${day}: No significant rain expected. Average temperature around ${avgTemp} degree Celsius. `;
+          alertMessage += `${day}: No significant weather issues. Average temperature ${avgTemp} degree Celsius. `;
+          safetyMessage = safetyTips.normal;
         }
       });
 
       twiml.say(`Weather alert for next days: ${alertMessage}`, lang);
+      twiml.say(`Recommended safety measures: ${safetyMessage}`, lang);
     }
   } catch (err) {
     twiml.say("Error fetching weather information.", lang);
@@ -223,6 +244,19 @@ app.post("/soil", (req, res) => {
   const soil = soils[parseInt(digit) - 1] || "Red Soil";
 
   twiml.say(`Suitable crops for ${soil} are ${soilCrops[soil]}`, lang);
+  twiml.hangup();
+
+  res.type("text/xml");
+  res.send(twiml.toString());
+});
+
+// ================= ALERT (Suggestion Only) =================
+app.post("/alert", (req, res) => {
+  const twiml = new VoiceResponse();
+  const langParam = req.query.lang || "1";
+  const lang = languageMap[langParam] || languageMap["1"];
+
+  twiml.say("Your alert suggestion has been recorded. Service center will be notified.", lang);
   twiml.hangup();
 
   res.type("text/xml");
