@@ -12,8 +12,6 @@ app.use(bodyParser.urlencoded({ extended: false }));
 const VoiceResponse = twilio.twiml.VoiceResponse;
 
 /* ================= DATA ================= */
-
-// Predefined crop prices
 const cropPrices = {
   Wheat: "2000 per quintal",
   Rice: "2500 per quintal",
@@ -27,7 +25,6 @@ const cropPrices = {
   Banana: "1000 per quintal",
 };
 
-// Soil to crops mapping
 const soilCrops = {
   "Red Soil": "Groundnut, Cotton",
   "Black Soil": "Cotton, Soybean",
@@ -36,7 +33,6 @@ const soilCrops = {
   "Desert Soil": "Millet",
 };
 
-// Twilio language/voice mapping
 const languageMap = {
   "1": { voice: "alice", language: "en-IN" }, // English
   "2": { voice: "alice", language: "hi-IN" }, // Hindi
@@ -44,7 +40,6 @@ const languageMap = {
   "4": { voice: "alice", language: "mr-IN" }, // Marathi
 };
 
-// Crop-focused weather safety tips
 const safetyTips = {
   rain:
     "Ensure proper drainage to avoid water logging. Avoid fertilizer application during rain. Delay harvesting if possible.",
@@ -158,7 +153,6 @@ app.post("/weather", async (req, res) => {
   }
 
   try {
-    // Current weather
     const currentRes = await fetch(
       `https://api.openweathermap.org/data/2.5/weather?zip=${pincode},IN&appid=${apiKey}&units=metric`
     );
@@ -175,14 +169,12 @@ app.post("/weather", async (req, res) => {
       twiml.say("Unable to fetch today's weather.", lang);
     }
 
-    // Forecast next 2 days
     const forecastRes = await fetch(
       `https://api.openweathermap.org/data/2.5/forecast?zip=${pincode},IN&appid=${apiKey}&units=metric`
     );
     const forecastData = await forecastRes.json();
 
     if (forecastData?.list?.length) {
-      // bucket by weekday label
       const forecastDays = {};
       forecastData.list.forEach((item) => {
         const date = new Date(item.dt * 1000).toLocaleDateString("en-IN", {
@@ -192,7 +184,7 @@ app.post("/weather", async (req, res) => {
         forecastDays[date].push(item);
       });
 
-      const days = Object.keys(forecastDays).slice(1, 3); // next 2 days
+      const days = Object.keys(forecastDays).slice(1, 3);
       let alertMessage = "";
       let safetyMessage = "";
 
@@ -227,7 +219,6 @@ app.post("/weather", async (req, res) => {
       twiml.say(`Weather alert for next days: ${alertMessage}`, lang);
       twiml.say(`Recommended crop safety measures: ${safetyMessage}`, lang);
 
-      // Ask if user wants to notify (just SAY it; no real send)
       const gather = twiml.gather({
         numDigits: 1,
         action: `/weatherAlert?lang=${langParam}`,
@@ -254,7 +245,7 @@ app.post("/weather", async (req, res) => {
   }
 });
 
-/* ============ WEATHER ALERT DECISION (Yes/No) ============ */
+/* ================= WEATHER ALERT DECISION ================= */
 app.post("/weatherAlert", (req, res) => {
   const twiml = new VoiceResponse();
   const digit = (req.body.Digits || "").trim();
@@ -262,14 +253,12 @@ app.post("/weatherAlert", (req, res) => {
   const lang = languageMap[langParam] || languageMap["1"];
 
   if (digit === "1") {
-    // Only speak confirmation; no real sending
     twiml.say("Alert will be sent to the service center.", lang);
     twiml.hangup();
   } else if (digit === "2") {
     twiml.say("Okay, no alert will be sent.", lang);
     twiml.hangup();
   } else {
-    // invalid input → ask again
     const gather = twiml.gather({
       numDigits: 1,
       action: `/weatherAlert?lang=${langParam}`,
@@ -345,11 +334,7 @@ app.post("/alert", (req, res) => {
   const langParam = req.query.lang || "1";
   const lang = languageMap[langParam] || languageMap["1"];
 
-  // Only speak; no actual sending
-  twiml.say(
-    "Alert will be sent to the service center.",
-    lang
-  );
+  twiml.say("Alert will be sent to the service center.", lang);
   twiml.hangup();
 
   res.type("text/xml");
