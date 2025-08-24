@@ -1,8 +1,8 @@
 import express from "express";
-import bodyParser from "body-parser";
-import dotenv from "dotenv";
-import fetch from "node-fetch";
 import twilio from "twilio";
+import bodyParser from "body-parser";
+import fetch from "node-fetch";
+import dotenv from "dotenv";
 
 dotenv.config();
 
@@ -36,7 +36,7 @@ const soilCrops = {
   "Desert Soil": "Millet",
 };
 
-// Language mapping
+// Twilio language/voice mapping
 const languageMap = {
   "1": { voice: "alice", language: "en-IN" }, // English
   "2": { voice: "alice", language: "hi-IN" }, // Hindi
@@ -164,11 +164,9 @@ app.post("/weather", async (req, res) => {
     );
     const currentData = await currentRes.json();
 
-    let weatherDesc = "unknown";
     if (currentData?.main && currentData?.weather?.[0]) {
-      weatherDesc = currentData.weather[0].description;
       twiml.say(
-        `Today's weather: ${weatherDesc}, temperature is ${Math.round(
+        `Today's weather: ${currentData.weather[0].description}, temperature is ${Math.round(
           currentData.main.temp
         )} degree Celsius.`,
         lang
@@ -228,11 +226,10 @@ app.post("/weather", async (req, res) => {
       twiml.say(`Weather alert for next days: ${alertMessage}`, lang);
       twiml.say(`Recommended crop safety measures: ${safetyMessage}`, lang);
 
+      // Ask if user wants to notify
       const gather = twiml.gather({
         numDigits: 1,
-        action: `/weatherAlert?lang=${langParam}&pincode=${pincode}&weatherDesc=${encodeURIComponent(
-          weatherDesc
-        )}&safetyMessage=${encodeURIComponent(safetyMessage)}`,
+        action: `/weatherAlert?lang=${langParam}&pincode=${pincode}`,
         method: "POST",
       });
       gather.say(
@@ -256,31 +253,23 @@ app.post("/weather", async (req, res) => {
   }
 });
 
-/* ================= WEATHER ALERT WITH TERMINAL LOG ================= */
+/* ============ WEATHER ALERT DECISION (Yes/No) ============ */
 app.post("/weatherAlert", (req, res) => {
   const twiml = new VoiceResponse();
   const digit = (req.body.Digits || "").trim();
   const langParam = req.query.lang || "1";
   const lang = languageMap[langParam] || languageMap["1"];
-
   const callerNumber = req.body.From;
   const pincode = req.query.pincode || "unknown";
-  const weatherDesc = req.query.weatherDesc || "unknown";
-  const safetyMessage = req.query.safetyMessage || "No safety tips available";
-
-  // Terminal logging
-  console.log("📞 Weather alert requested!");
-  console.log("Caller Number:", callerNumber);
-  console.log("Pincode:", pincode);
-  console.log("Current Weather:", weatherDesc);
-  console.log("Recommended Crop Safety Tips:", safetyMessage);
-  console.log("-----------------------------");
 
   if (digit === "1") {
-    twiml.say(
-      "Alert noted. A service agent will contact you shortly with advice.",
-      lang
-    );
+    // Display the number in console
+    console.log("📞 Weather alert requested!");
+    console.log("Caller Number:", callerNumber);
+    console.log("Pincode:", pincode);
+    console.log("-----------------------------");
+
+    twiml.say("Alert will be sent to the service center.", lang);
     twiml.hangup();
   } else if (digit === "2") {
     twiml.say("Okay, no alert will be sent.", lang);
@@ -288,15 +277,11 @@ app.post("/weatherAlert", (req, res) => {
   } else {
     const gather = twiml.gather({
       numDigits: 1,
-      action: `/weatherAlert?lang=${langParam}&pincode=${encodeURIComponent(
-        pincode
-      )}&weatherDesc=${encodeURIComponent(
-        weatherDesc
-      )}&safetyMessage=${encodeURIComponent(safetyMessage)}`,
+      action: `/weatherAlert?lang=${langParam}&pincode=${pincode}`,
       method: "POST",
     });
     gather.say(
-      "Invalid input. Press 1 to notify service center, or 2 to skip.",
+      "Invalid input. Press 1 to send the alert, or 2 to skip.",
       lang
     );
   }
@@ -365,10 +350,13 @@ app.post("/alert", (req, res) => {
   const langParam = req.query.lang || "1";
   const lang = languageMap[langParam] || languageMap["1"];
 
-  twiml.say(
-    "Alert noted. A service agent will contact you shortly.",
-    lang
-  );
+  // Display the caller number
+  const callerNumber = req.body.From;
+  console.log("📞 Manual alert triggered!");
+  console.log("Caller Number:", callerNumber);
+  console.log("-----------------------------");
+
+  twiml.say("Alert will be sent to the service center.", lang);
   twiml.hangup();
 
   res.type("text/xml");
@@ -377,4 +365,4 @@ app.post("/alert", (req, res) => {
 
 /* ================= SERVER ================= */
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
